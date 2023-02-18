@@ -1,0 +1,604 @@
+Sub Solve_LCOH()
+'
+'Solves the LCOH Tariff underpinning the Simulation
+
+'Macro that calculates this LCOH according to the calculation options selected by the user, in relation for example to:
+    '- the Calculation Mode (One-Off vs Dynamic): either i) on a One-Off basis ie without resizing debt to the level the LCOH Tariff can support, or ii) on a Dynamic whereby the integrated macro also resizes debt to the level the LCOH Tariff can support
+    '- the Target EIRR Case upon which to calculate the LCOH (ie : Base Case vs Debt Case) : which requires this macro to switch between Base and Debt Cases when running in Dynamic LCOH Mode and with a Base Case Target EIRR
+
+'Note - if the Classic solving override is On (ie True), then the LCOH Solving is always done on the Offtake Tariff Mode
+'Note - if the Classic solving override is Off (ie False), then the LCOH Solving is always done for the originally selected Tariff Mode running, ie for Offtake Tariff or for LCOH Tariff depending on the selected Tariff Mode
+
+
+'Macro Top
+    Call Top
+
+'Initial preliminary steps before setting Variable values
+
+    '1) If the Classic solving override is On (ie True), ensure the correct settings for the Simulation Override Parameters
+        'Note - it is important that this is done before assigning below the values for the Macro Specific Variables
+        Call Classic_Override
+
+    '2) Indicate which Solve Macro is going to run now
+        'Note - this flag is used in the Calculations sheet to test the live status of the solve data
+        'Note - the codes are 1 for Solve Debt Macro and 2 for Solve LCOH macro
+        C.Range("[V]LiveSM").Value = 2  '1 here, for Solve LCOH
+    
+    '3) Recalculate as initial step before recording initial values for Variables specific to this macro
+        'Note - also checked and confirmed, this IS required HERE before indicating the (initial) values for Variables
+        Calculate
+
+'Identify the FIRST of three blocks of Macro Specific Variables and their Data Types
+    'Note - Separating out the second block to later lets us cut-out a Calculation step, as the Variables in this initial block are not calculation dependent
+    'Note - Separating out the third block to later is reauired to avoid polluting the Recording Iteration Variables used for Solving LCOH Tariff with those cleaned-out at the end of the Solve Debt Macro if this is called during the SPCheck step below
+    
+    Dim SimC As String  'the Case initially running in the model (Base Case or Debt Case)
+    Dim SimHM As String  'the option currently selected for Hourly Mapping calculations
+    Dim LCOH As Boolean  'the option that runs the LCOH Tariff through the model instead of the normal Offtake Tariff
+    Dim LCOHD As Boolean  'the option that runs LCOH resolution in "Dynamic" Mode, ie resizing debt in line with LCOH tariff ("One-Off" being the alternative Mode)
+    Dim LCOHcase As String  'the Case on which this macro should resolve the LCOH Tariff (ie Target EIRR for either the Base Case or Debt Case)
+    Dim LCOHstay As Boolean  'the option currently selected to indicate whether this LCOH macro should remain in LCOH Mode once finished or whether it should revert back to normal Offtake Mode
+    Dim SPCheck As Boolean  'the Check on Project Simulation Consistency at the start to verify that the atest applicable Solve Debt Run was done on the current simulation
+    Dim SRRAUFRstatus As Boolean  'the Status Check on the (last) Pasted Values for SRRA Ultimate Funding Requirements to ensure they correspond to the current simulation
+
+'Set the values for this first block of Macro Specific Variables
+    SimC = D.Range("[V]Case").Value  'Records the (initial) Case running in the model (Base Case or Debt Case) - used to switch between Cases as required for the macro and to revert back to the initial case at end if appropriate
+    SimHM = D.Range("[V]HM").Value  'Records the (initial) value - used only to determine whether or not to recalculate the HM and HMR worksheets during the recalculation operations of this macro after changing Case
+    LCOH = D.Range("[V]LCOH").Value  'Records the (initial) Tariff Mode option - used to switch between Tariff Mode as required for the macro and to revert back to this initial mode at end if appropriate
+    LCOHD = D.Range("[V]LCOHD").Value  'Records the (initial) LCOH Resolution basis - used only to determine which steps are used below for LCOH resolution
+    LCOHcase = D.Range("[V]LCOHcase").Value  'Records the (initial) LCOH Resolution Case - used to determine which steps are used below for LCOH resolution
+    LCOHstay = D.Range("[V]LCOHstay").Value  'Records the (initial) option selected to indicate whether this LCOH macro should remain in LCOH Mode once finished or whether it should revert back to normal Offtake Mode
+    SPCheck = C.Range("[V]SPCheck").Value  'Records the (initial) Project Simulation Consistency check - used to determine whether first need to run the Solve_Debt Macro before calculating the LCOH
+    SRRAUFRstatus = C.Range("[V]SRRAUFRstatus").Value  'Records the (initial) value - used to determine whether to start this Solve_LCOH macro by recopying the SRRA Ultimate Funding Requirements to update these to the current simulation
+
+
+'Preliminary step, check the SRRA Ultimate Funding Requirements reflect the Current Simulation
+    'Note - this preliminary step is required as the SRRA Ultimate Funding Requirements data is the only data that is directly copy/pasted into the live model outwith the Solve copy/past zone itself (and required as a prerequisite to the Solve copy/paste operation given the optionality in the model to choose between Base and Debt Case SRRA funding requirements for the SRRA reference).
+
+        'First, if required, update the SRRA Ultimate Funding Requirements Pasted Values
+        
+        'Check if update is required:
+            If SRRAUFRstatus = False Then
+
+            'Perform the update where required:
+                
+                'Where the Base Case is currently running
+                    If SimC = "Base" Then
+                    
+                    'Record the Base Case Target SRRA Ultimate Funding Requirement
+                        C.Range("[R]SRRAUFRbcPaste1").Value = C.Range("[R]SRRAUFRliveCopy1").Value
+                        C.Range("[R]SRRAUFRbcPaste2").Value = C.Range("[R]SRRAUFRliveCopy2").Value
+                
+                    'Change to Debt Case
+                        D.Range("[V]Case").Value = "Debt"
+                    
+                        'Recalculate ONLY the necessary worksheets
+                            D.Calculate
+                            If SimHM = "Live" Then
+                                HM.Calculate
+                                HMR.Calculate
+                            End If
+                            C.Calculate
+            
+                    'Record the Debt Case Target SRRA Ultimate Funding Requirement
+                        C.Range("[R]SRRAUFRdcPaste1").Value = C.Range("[R]SRRAUFRliveCopy1").Value
+                        C.Range("[R]SRRAUFRdcPaste2").Value = C.Range("[R]SRRAUFRliveCopy2").Value
+                
+                
+                'Where the Debt Case is currently running
+                    Else
+                
+                    'Record the Debt Case Target SRRA Ultimate Funding Requirement
+                        C.Range("[R]SRRAUFRdcPaste1").Value = C.Range("[R]SRRAUFRliveCopy1").Value
+                        C.Range("[R]SRRAUFRdcPaste2").Value = C.Range("[R]SRRAUFRliveCopy2").Value
+                
+                    'Change to Base Case
+                        D.Range("[V]Case").Value = "Base"
+                    
+                        'Recalculate ONLY the necessary worksheets
+                            D.Calculate
+                            If SimHM = "Live" Then
+                                HM.Calculate
+                                HMR.Calculate
+                            End If
+                            C.Calculate
+            
+                    'Record the Debt Case Target SRRA Ultimate Funding Requirement
+                        C.Range("[R]SRRAUFRbcPaste1").Value = C.Range("[R]SRRAUFRliveCopy1").Value
+                        C.Range("[R]SRRAUFRbcPaste2").Value = C.Range("[R]SRRAUFRliveCopy2").Value
+
+                    End If
+            
+                'Note - The recalculation that would normally be needed now so that the 'starting' simulation for the Solve macro below reflects the updated SRRA Ultimate Funding Requirement values is done after setting appropriate model Settings to Solve LCOH
+            
+            End If
+
+'Set the appropriate model settings to Solve LCOH
+
+    'Make sure running in LCOH Tariff Mode
+        If LCOH = False Then
+            D.Range("[V]LCOH").Value = True
+        End If
+    'Make sure running in LCOH EIRR Case
+'''        If SimC <> LCOHcase Then    'Changed formulation now that added in the SRRAUFR check at the start of this macro
+'''            d.Range("[V]Case").Value = LCOHcase
+'''        End If
+            D.Range("[V]Case").Value = LCOHcase
+    
+    'Make sure the Solve2 testing flag is on (note - this IS the appropriate starting point for all LCOH Solving steps below)
+        C.Range("[V]S2").Value = True
+    
+    'Recalculate only the necessary sheets
+        If SimHM = "Live" Then
+            HM.Calculate
+            HMR.Calculate
+        End If
+        C.Calculate
+
+
+'Identify the SECOND block of Macro Specific Variables and their Data Types
+'Here it is the Solve Check Variables that are dependent on the preceding Settings and Calculation steps
+    
+    Dim SStatus As Boolean 'the Status Check to verify if the Solve_LCOH has already been run and so enable to exit the Macro without going through each step
+
+'Set the values for this second block of Macro Specific Variables
+    SStatus = C.Range("[V]SStatus").Value  'Records the (initial) overall Solve Status - used at start to exit this macro if the Solve_LCOH has already been run
+
+
+'Check Solve Status and exit the macro if LCOH has already been run for this simulation
+        If SStatus = True Then
+            
+            'Switch OFF the Solve2 test flag
+                C.Range("[V]S2").Value = False
+
+            'Close out steps, reverting back to Original Settings if appropriate
+            
+                'Either a): Revert back to Offtake Tariff mode and Original Case
+                    If LCOHstay = False Then  ' ie don't stay in LCOH mode
+                    
+                        'Revert to the Orginal Tariff Mode
+                            If LCOH = False Then
+                                D.Range("[V]LCOH").Value = False
+                            End If
+                        
+                        'Revert to the Orginal Case
+                            If SimC <> LCOHcase Then
+                                D.Range("[V]Case").Value = SimC
+                            End If
+                
+                'Or b): Stay in LCOH Mode and LCOH EIRR Case
+                    Else  ' ie stay in LCOH mode
+                        'No action required as already running here in LCOH Mode and LCOH EIRR Case
+                    End If
+                    
+            'Recalculate ALL worksheets and Reposition
+                Calculate
+                Application.Goto Reference:=D.Cells(1, 1)
+            
+            'Macro Tail
+                Call Tail
+            
+            'Exit Sub
+                Exit Sub
+        End If
+
+'Note - when LCOH is going to be Calculated below, here the BP is always running in LCOH Tariff Mode, in the LCOH EIRR Case and with the Solve2 test flag ON
+    'Note - these are the settings required for the next steps in this macro irrespective of what LCOH EIRR Case or Resolution Mode is is to be calculated (Base vs Debt Case, and Dynamic vs One-Off)
+
+
+'Preliminary steps,
+
+    
+    '2) Check Project Simulation Consistency Identity is consistent with the latest applicable Solve Debt Run and, if required, Solve_Debt before calculating the LCOH
+        'Note - this only needs to be done when LCOH is to be calculated on One-Off/As-Is basis (for Dynamic basis, the debt is going to be updated in parallel anyway)
+        'Note - the SPCheck value here is still the initial recorded value above, before setting the file to LCOH Tariff Mode.  This IS correct as it therefore rightly takes into account WHICH as-is debt the LCOH is to be calculated on in this macro
+            If LCOHD = False And SPCheck = False Then
+                Call Solve_Debt
+            End If
+
+
+'Note - here, the BP is STILL always running in LCOH Tariff Mode, in the LCOH EIRR Case and with the Solve2 test flag ON (as the Solve Debt macro always reverts back to its opening settings)
+'ie the settings required for the next steps in this macro irrespective of what LCOH EIRR Case or Resolution Mode is is to be calculated (Base vs Debt Case, and Dynamic vs One-Off)
+
+
+'Identify the THIRD block of Macro Specific Variables and their Data Types
+'Here it is the Recording Iteration Variables used to record iteration values during the Solving Loop, when this option is selected (rare as only for review purposes)
+    'Note - these variables have to be located here ie after the SPCheck step above, as if the SPCheck step calls the Solve_Debt Macro then all the Recording Iteration Variables therein are cleaned-out to Empty at the end of the Solve_Debt Macrom whereas they need to start afresh in this Solve_LCOH Macro
+    
+    Dim REC As Boolean  'the option that records the iterations during the Solving Loop
+
+'Set the values for this third block of Macro Specific Variables
+    REC = D.Range("[V]ItersRec").Value 'Records the (initial) value - used only to determine whether or not to record the iterations during the Solving Loop
+
+    'And those variables specific to recording iteration values during the Solving Loop, when this option is selected (rare as only for review purposes)
+        If REC = True Then
+            'Identify those specific Variables and their Data Types
+                Dim LS As Integer  'the line start reference
+                Dim LE As Integer  'the line end reference
+                Dim CS As Integer  'the column start reference
+                Dim i As Integer  'the iteration number
+            
+            'Set the values for these specific Variables
+                LS = C.Range("[V]ItersLineStart").Value 'Records the (initial and permanent) line start reference - used only to position the iteration record
+                LE = C.Range("[V]ItersLineEnd").Value 'Records the (initial and permanent) line end reference - used only to position the iteration record
+                CS = C.Range("[V]CColStart").Value 'Records the (initial and permanent) column start reference - used only to position the iteration record
+                i = 0 'Records the (initial) starting value for iteration counting - used only to position the iteration record
+        End If
+
+
+'Now resolve the LCOH Tariff and record solving results
+
+
+    'EITHER A): SOLVE LCOH TARIFF ON DEBT CASE EIRR
+    
+        If LCOHcase = "Debt" Then  'ie for Debt Case EIRR
+
+            'Step1: Copy/Paste Loop to calculate LCOH Tariff
+                
+                
+                'Either a): FOR LCOH calculated on the ONE-OFF/AS-IS basis ie without resizing debt
+                
+                    If LCOHD = False Then 'ie One-Off/As-Is basis
+                
+                        'Copy/Paste Loop on Solve2 LCOH Tariff data only
+                                
+                            'Either i): When Not-recording each loop iteration
+                                If REC = False Then
+                                        
+                                        Do
+                                            'Copy Paste the LCOH Tariff Range first
+                                                C.Range("[R]S2Paste2").Value = C.Range("[R]S2Copy").Value
+                                            'Recalculate to update test value
+                                                C.Calculate
+                                        'Test to see if can exit the Loop
+                                        Loop Until C.Range("[V]STest").Value = 0
+                            
+                            'Or ii): When Recording each loop iteration
+                                Else
+                                                    'ADDED section: If selected, delete previous iteration records in any
+                                                        'Note - must be before the Loop below
+                                                            If C.Range("[V]Iters") = True Then
+                                                                Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the clearing action below to work
+                                                                C.Range("[R]ItersRange").Select
+                                                                Selection.ClearContents
+                                                            End If
+                                        Do
+                                            'Copy Paste the LCOH Tariff Range first
+                                                C.Range("[R]S2Paste2").Value = C.Range("[R]S2Copy").Value
+                                            'Recalculate to update test value
+                                                C.Calculate
+                                                    
+                                                    'ADDED section: If selected, record the loop iteration values
+                                                        'Iteration number
+                                                            i = i + 1
+                                                        'Record the iteration values
+                                                            Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the pasting of values below to work
+                                                            C.Range(Cells(LS, CS + i), Cells(LE, CS + i)) = C.Range("[R]ItersData").Value
+                                        
+                                        'Test to see if can exit the Loop
+                                        Loop Until C.Range("[V]STest").Value = 0
+                                
+                                                    'ADDED section: Clear the temporary positioning and iteration Variables as no longer needed
+                                                        REC = Empty
+                                                        LS = Empty
+                                                        LE = Empty
+                                                        CS = Empty
+                                                        i = Empty
+                                End If
+                    
+                    
+                'Or b): FOR LCOH calculated on the DYNAMIC basis ie also resizing debt to the level this LCOH Tariff can support
+                    
+                    Else  'ie Dynamic basis
+                    
+                        'Copy/Paste Loop on Solve2 LCOH Tariff data and Solve1 Debt data
+                                
+                            'Either i): When Not-recording each loop iteration
+                                If REC = False Then
+                                        
+                                        Do
+                                            'Copy Paste the LCOH Tariff data Range first, to solve Tariff
+                                                C.Range("[R]S2Paste2").Value = C.Range("[R]S2Copy").Value
+                                            'Switch to Solve1 Debt data and Copy Paste the Debt data Range to solve Debt
+                                                C.Range("[V]S2").Value = False
+                                                C.Range("[R]S1Paste2").Value = C.Range("[R]S1Copy").Value
+                                            'Recalculate
+                                                C.Calculate
+                                            'Record latest solve Debt data (in "SM2" zone) (needed for the 'double-test')
+                                                C.Range("[R]SM2LastPasteDC").Value = C.Range("[R]SMLastCopy").Value
+                                            'Switch back to Solve2 LCOH testing to check if Tariff still passes the test after resizing Debt
+                                                C.Range("[V]S2").Value = True
+                                            'Recalculate to update test value
+                                                C.Calculate
+                                        'Test to see if can exit the Loop
+                                        Loop Until C.Range("[V]STest").Value = 0
+                            
+                            'Or ii): When Recording each loop iteration
+                                Else
+                                                    'ADDED section: If selected, delete previous iteration records in any
+                                                        'Note - must be before the Loop below
+                                                            If C.Range("[V]Iters") = True Then
+                                                                Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the clearing action below to work
+                                                                C.Range("[R]ItersRange").Select
+                                                                Selection.ClearContents
+                                                            End If
+                                        Do
+                                            'Copy Paste the LCOH Tariff data Range first, to solve Tariff
+                                                C.Range("[R]S2Paste2").Value = C.Range("[R]S2Copy").Value
+                                            'Switch to Solve1 Debt data and Copy Paste the Debt data Range to solve Debt
+                                                C.Range("[V]S2").Value = False
+                                                C.Range("[R]S1Paste2").Value = C.Range("[R]S1Copy").Value
+                                            'Recalculate
+                                                C.Calculate
+                                                    
+                                                    'ADDED section: If selected, record the loop iteration values for this Solve1Debt step
+                                                        'Iteration number
+                                                            i = i + 1
+                                                        'Record the iteration values
+                                                            Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the pasting of values below to work
+                                                            C.Range(Cells(LS, CS + i), Cells(LE, CS + i)) = C.Range("[R]ItersData").Value
+                                            
+                                            'Record latest solve Debt data (in "SM2" zone) (needed for the 'double-test')
+                                                C.Range("[R]SM2LastPasteDC").Value = C.Range("[R]SMLastCopy").Value
+                                            'Switch back to Solve2 LCOH testing to check if Tariff still passes the test after resizing Debt
+                                                C.Range("[V]S2").Value = True
+                                            'Recalculate to update test value
+                                                C.Calculate
+                                                    
+                                                    'ADDED section: If selected, record the loop iteration values for this Solve2 Tariff step
+                                                        'Iteration number
+                                                            i = i + 1
+                                                        'Record the iteration values
+                                                            Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the pasting of values below to work
+                                                            C.Range(Cells(LS, CS + i), Cells(LE, CS + i)) = C.Range("[R]ItersData").Value
+                                        
+                                        'Test to see if can exit the Loop
+                                        Loop Until C.Range("[V]STest").Value = 0
+                                
+                                                    'ADDED section: Clear the temporary positioning and iteration Variables as no longer needed
+                                                        REC = Empty
+                                                        LS = Empty
+                                                        LE = Empty
+                                                        CS = Empty
+                                                        i = Empty
+                                End If
+                    
+                    End If
+                
+            'Step2: Record latest Solve LCOH Tariff data (in "SM3" zone)
+            
+                'Record latest solve data under DEBT Case
+                    C.Range("[R]SM3LastPasteDC").Value = C.Range("[R]SMLastCopy").Value
+                    C.Range("[R]SM3LastLabelsPaste").Value = C.Range("[R]SMLastLabelsCopy").Value
+                
+                'Record latest solve data under BASE Case
+                    D.Range("[V]Case").Value = "Base"
+                    C.Range("[V]S2").Value = False
+                    'Recalculations
+                        If SimHM = "Live" Then
+                            HM.Calculate
+                            HMR.Calculate
+                        End If
+                        C.Calculate
+                    C.Range("[R]SM3LastPasteBC").Value = C.Range("[R]SMLastCopy").Value
+
+
+    
+    'OR B): SOLVE LCOH TARIFF ON BASE CASE EIRR
+
+        Else  'ie for Base Case EIRR
+        
+            'Step1: Copy/Paste Loop to calculate LCOH Tariff
+                
+                
+                'Either a): For LCOH calculated on the ONE-OFF/AS-IS basis ie without resizing debt
+                    
+                    If LCOHD = False Then 'ie One-Off/As-Is basis
+                
+                        'Copy/Paste Loop on Solve2 LCOH Tariff data only
+                                
+                            'Either i): When NOT-RECORDING each loop iteration
+                                If REC = False Then
+                                        
+                                        Do
+                                            'Copy Paste the LCOH Tariff Range first
+                                                C.Range("[R]S2Paste2").Value = C.Range("[R]S2Copy").Value
+                                            'Recalculate to update test value
+                                                C.Calculate
+                                        'Test to see if can exit the Loop
+                                        Loop Until C.Range("[V]STest").Value = 0
+                            
+                            'Or ii): When RECORDING each loop iteration
+                                Else
+                                                    'ADDED section: If selected, delete previous iteration records in any
+                                                        'Note - must be before the Loop below
+                                                            If C.Range("[V]Iters") = True Then
+                                                                Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the clearing action below to work
+                                                                C.Range("[R]ItersRange").Select
+                                                                Selection.ClearContents
+                                                            End If
+                                        Do
+                                            'Copy Paste the LCOH Tariff Range first
+                                                C.Range("[R]S2Paste2").Value = C.Range("[R]S2Copy").Value
+                                            'Recalculate to update test value
+                                                C.Calculate
+                                                    
+                                                    'ADDED section: If selected, record the loop iteration values
+                                                        'Iteration number
+                                                            i = i + 1
+                                                        'Record the iteration values
+                                                            Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the pasting of values below to work
+                                                            C.Range(Cells(LS, CS + i), Cells(LE, CS + i)) = C.Range("[R]ItersData").Value
+                                        
+                                        'Test to see if can exit the Loop
+                                        Loop Until C.Range("[V]STest").Value = 0
+                                
+                                                    'ADDED section: Clear the temporary positioning and iteration Variables as no longer needed
+                                                        REC = Empty
+                                                        LS = Empty
+                                                        LE = Empty
+                                                        CS = Empty
+                                                        i = Empty
+                                End If
+                        
+                
+                'Or b): For LCOH calculated on the DYNAMIC basis ie also resizing debt to the level this LCOH Tariff can support
+                    
+                    Else  'ie Dynamic basis
+                    
+                        'Copy/Paste Loop on Solve2 LCOH Tariff data and Solve1 Debt data
+                                
+                            'Either i): When NOT-RECORDING each loop iteration
+                                If REC = False Then
+                                        
+                                        Do
+                                            'Copy Paste the LCOH Tariff data Range first, to solve Tariff
+                                                C.Range("[R]S2Paste2").Value = C.Range("[R]S2Copy").Value
+                                            'Switch to Debt Case and Solve1 Debt data then Copy Paste the Debt data Range to solve Debt
+                                                D.Range("[V]Case").Value = "Debt"
+                                                C.Range("[V]S2").Value = False
+                                                'Recalculations
+                                                    If SimHM = "Live" Then
+                                                        HM.Calculate
+                                                        HMR.Calculate
+                                                    End If
+                                                    C.Calculate
+                                                C.Range("[R]S1Paste2").Value = C.Range("[R]S1Copy").Value
+                                            'Recalculate
+                                                C.Calculate
+                                            'Record latest solve data (in "SM2" zone) (needed for the 'double-test')
+                                                C.Range("[R]SM2LastPasteDC").Value = C.Range("[R]SMLastCopy").Value
+                                            'Switch back to Base Case and Solve2 LCOH testing to check if Tariff still passes the test after resizing Debt
+                                                D.Range("[V]Case").Value = "Base"
+                                                C.Range("[V]S2").Value = True
+                                                'Recalculations
+                                                    If SimHM = "Live" Then
+                                                        HM.Calculate
+                                                        HMR.Calculate
+                                                    End If
+                                                    C.Calculate
+                                        'Test to see if can exit the Loop
+                                        Loop Until C.Range("[V]STest") = 0
+                            
+                            'Or ii): When RECORDING each loop iteration
+                                Else
+                                                    'ADDED section: If selected, delete previous iteration records in any
+                                                        'Note - must be before the Loop below
+                                                            If C.Range("[V]Iters") = True Then
+                                                                Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the clearing action below to work
+                                                                C.Range("[R]ItersRange").Select
+                                                                Selection.ClearContents
+                                                            End If
+                                        Do
+                                            'Copy Paste the LCOH Tariff data Range first, to solve Tariff
+                                                C.Range("[R]S2Paste2").Value = C.Range("[R]S2Copy").Value
+                                            'Switch to Debt Case and Solve1 Debt data then Copy Paste the Debt data Range to solve Debt
+                                                D.Range("[V]Case").Value = "Debt"
+                                                C.Range("[V]S2").Value = False
+                                                'Recalculations
+                                                    If SimHM = "Live" Then
+                                                        HM.Calculate
+                                                        HMR.Calculate
+                                                    End If
+                                                    C.Calculate
+                                                C.Range("[R]S1Paste2").Value = C.Range("[R]S1Copy").Value
+                                            'Recalculate
+                                                C.Calculate
+                                                    
+                                                    'ADDED section: If selected, record the loop iteration values for this Solve1Debt step
+                                                        'Iteration number
+                                                            i = i + 1
+                                                        'Record the iteration values
+                                                            Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the pasting of values below to work
+                                                            C.Range(Cells(LS, CS + i), Cells(LE, CS + i)) = C.Range("[R]ItersData").Value
+                                            
+                                            'Record latest solve data (in "SM2" zone) (needed for the 'double-test')
+                                                C.Range("[R]SM2LastPasteDC").Value = C.Range("[R]SMLastCopy").Value
+                                            'Switch back to Base Case and Solve2 LCOH testing to check if Tariff still passes the test after resizing Debt
+                                                D.Range("[V]Case").Value = "Base"
+                                                C.Range("[V]S2").Value = True
+                                                'Recalculations
+                                                    If SimHM = "Live" Then
+                                                        HM.Calculate
+                                                        HMR.Calculate
+                                                    End If
+                                                    C.Calculate
+                                                    
+                                                    'ADDED section: If selected, record the loop iteration values for this Solve2 Tariff step
+                                                        'Iteration number
+                                                            i = i + 1
+                                                        'Record the iteration values
+                                                            Application.Goto Reference:=C.Cells(1, 1)  'Note - this IS needed for the pasting of values below to work
+                                                            C.Range(Cells(LS, CS + i), Cells(LE, CS + i)) = C.Range("[R]ItersData").Value
+                                        
+                                        'Test to see if can exit the Loop
+                                        Loop Until C.Range("[V]STest").Value = 0
+                                
+                                                    'ADDED section: Clear the temporary positioning and iteration Variables as no longer needed
+                                                        REC = Empty
+                                                        LS = Empty
+                                                        LE = Empty
+                                                        CS = Empty
+                                                        i = Empty
+                                End If
+                    
+                    End If
+                    
+            'Step2: Record latest Solve LCOH Tariff data (in "SM3" zone)
+            
+                'Record latest solve data under BASE Case
+                    C.Range("[R]SM3LastPasteBC").Value = C.Range("[R]SMLastCopy").Value
+                    C.Range("[R]SM3LastLabelsPaste").Value = C.Range("[R]SMLastLabelsCopy").Value
+                
+                'Record latest solve data under DEBT Case
+                    D.Range("[V]Case").Value = "Debt"
+                    C.Range("[V]S2").Value = False
+                    'Recalculations
+                        If SimHM = "Live" Then
+                            HM.Calculate
+                            HMR.Calculate
+                        End If
+                        C.Calculate
+                    C.Range("[R]SM3LastPasteDC").Value = C.Range("[R]SMLastCopy").Value
+        End If
+
+
+
+'Note - here, after calculating the LCOH Tariff, the BP is always running in LCOH Tariff Mode, in the Non-LCOH EIRR Case and with the Solve2 test flag OFF
+   
+
+'Close out steps, reverting back to Original Settings if appropriate
+
+    'Either a): Revert back to Offtake Tariff Mode and Original Case
+        If LCOHstay = False Then  ' ie don't stay in LCOH mode
+        
+            'Revert to the Orginal Tariff Mode
+                If LCOH = False Then
+                    D.Range("[V]LCOH").Value = False
+                End If
+            'Revert to the Orginal Case
+                If SimC = LCOHcase Then
+                    D.Range("[V]Case").Value = SimC
+                End If
+    
+    'Or b): Stay in LCOH Tariff Mode and LCOH EIRR Case
+        Else  ' ie stay in LCOH mode
+            
+            'Revert back to LCOH EIRR Case (Note - required in all cases as LCOH Solving always ends up running in non-LCOH EIRR Case)
+                D.Range("[V]Case").Value = LCOHcase
+        
+        End If
+
+'Recalculate ALL worksheets and Reposition
+    Calculate
+    Application.Goto Reference:=D.Cells(1, 1)
+
+'Record macro run time in Calcs Solving LCOH section
+    'Note - the Macro Tail will record the run time in the Dashboard tab
+    RT = Round(Timer - ST, 1)
+    C.Range("[V]RT2").Value = RT
+
+'Macro Tail
+    Call Tail
+
+End Sub
